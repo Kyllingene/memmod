@@ -3,5 +3,11 @@ name = "memmod"
 version = "1.2.1"
 edition = "2021"
 
+license = "mit"
+repository = "https://github.com/kyllingene/memmod"
+
+authors = ["Kyllingene"]
+description = "A unix utility for attaching to a process and accessing its memory."
+
 [dependencies]
 nix = "0.26.2"
