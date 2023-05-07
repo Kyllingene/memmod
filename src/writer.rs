@@ -1,17 +1,17 @@
 use std::io::{Write, self};
-use crate::{Process, Address};
+use crate::Process;
 
 
 #[derive(Debug)]
 pub struct ProcessWriter<'a> {
     proc: &'a mut Process,
 
-    offset: Address,
+    offset: usize,
     data: Vec<u8>,
 }
 
 impl<'a> ProcessWriter<'a> {
-    pub fn new(proc: &'a mut Process, offset: Address) -> Self {
+    pub fn new(proc: &'a mut Process, offset: usize) -> Self {
         Self {
             proc,
             offset,

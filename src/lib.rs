@@ -23,8 +23,6 @@ pub mod writer;
 pub use reader::ProcessReader;
 pub use writer::ProcessWriter;
 
-pub type Address = usize;
-
 fn get_process_status_name(file: &str) -> io::Result<String> {
     let data = read_to_string(file)?;
     let line = data.lines().next().expect("Bad /proc/*/status format");
@@ -45,7 +43,7 @@ pub struct Process {
     stopped: bool,
 
     name: String,
-    base: Option<Address>,
+    base: Option<usize>,
 }
 
 impl Process {
@@ -104,7 +102,7 @@ impl Process {
                 let (base, _) = line.split_once('-')
                     .ok_or(Errno::ENOKEY)?;
 
-                self.base = Some(Address::from_str_radix(base, 16).map_err(|_| io::Error::new(ErrorKind::InvalidData, format!("Bad format in /proc/{}/maps", self.pid)))?);
+                self.base = Some(usize::from_str_radix(base, 16).map_err(|_| io::Error::new(ErrorKind::InvalidData, format!("Bad format in /proc/{}/maps", self.pid)))?);
                 return Ok(());
             }
         }
@@ -131,27 +129,27 @@ impl Process {
         Ok(())
     }
 
-    pub fn read_word(&mut self, address: Address) -> io::Result<i64> {
+    pub fn read_word(&mut self, usize: usize) -> io::Result<i64> {
         self.stop()?;
 
         let addr = unsafe {
-            null::<c_void>().offset(address as isize) as *mut c_void
+            null::<c_void>().offset(usize as isize) as *mut c_void
         };
 
         let data = ptrace::read(self.pid, addr)?;
         Ok(data)
     }
 
-    pub fn read_word_offset(&mut self, offset: Address) -> io::Result<i64> {
+    pub fn read_word_offset(&mut self, offset: usize) -> io::Result<i64> {
         self.get_base()?;
         self.read_word(self.base.unwrap() + offset)
     }
 
-    pub fn write_word(&mut self, address: Address, data: i64) -> io::Result<()> {
+    pub fn write_word(&mut self, usize: usize, data: i64) -> io::Result<()> {
         self.stop()?;
 
         let addr = unsafe {
-            null::<c_void>().offset(address as isize) as *mut c_void
+            null::<c_void>().offset(usize as isize) as *mut c_void
         };
 
         let data = unsafe {
@@ -165,7 +163,7 @@ impl Process {
         Ok(())
     }
 
-    pub fn write_word_offset(&mut self, offset: Address, data: i64) -> io::Result<()> {
+    pub fn write_word_offset(&mut self, offset: usize, data: i64) -> io::Result<()> {
         self.get_base()?;
         self.write_word(self.base.unwrap() + offset, data)
     }
@@ -174,7 +172,7 @@ impl Process {
         self.pid
     }
 
-    pub fn reader<'a>(&'a mut self, offset: Address, length: usize) -> ProcessReader<'a> {
+    pub fn reader<'a>(&'a mut self, offset: usize, length: usize) -> ProcessReader<'a> {
         ProcessReader::new(
             self,
             offset,
@@ -182,7 +180,7 @@ impl Process {
         )
     }
 
-    pub fn writer<'a>(&'a mut self, offset: Address) -> ProcessWriter<'a> {
+    pub fn writer<'a>(&'a mut self, offset: usize) -> ProcessWriter<'a> {
         ProcessWriter::new(
             self,
             offset

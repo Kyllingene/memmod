@@ -1,17 +1,17 @@
 use std::io::{Read, self, ErrorKind};
 
-use crate::{Process, Address};
+use crate::Process;
 
 #[derive(Debug)]
 pub struct ProcessReader<'a> {
     proc: &'a mut Process,
 
-    offset: Address,
+    offset: usize,
     length: usize,
 }
 
 impl<'a> ProcessReader<'a> {
-    pub fn new(proc: &'a mut Process, offset: Address, length: usize) -> Self {
+    pub fn new(proc: &'a mut Process, offset: usize, length: usize) -> Self {
         Self {
             proc,
             offset,
