@@ -45,6 +45,16 @@ impl<'a> ProcessReader<'a> {
         self.advance = true;
         self
     }
+
+    /// Jumps to an offset in memory.
+    pub fn goto(&mut self, offset: usize) {
+        self.offset = offset;
+    }
+
+    /// Jumps to an address in memory.
+    pub fn goto_addr(&mut self, address: usize) {
+        self.offset = address - self.proc.base.unwrap();
+    }
 }
 
 impl<'a> Read for ProcessReader<'a> {

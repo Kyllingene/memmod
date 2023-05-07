@@ -1,6 +1,6 @@
 use std::{
     fs::{read_dir, read_to_string},
-    io::{self, ErrorKind},
+    io::{self, ErrorKind, Read},
     os::raw::c_void,
     ptr::null,
 };
@@ -15,8 +15,13 @@ pub use nix::{errno::Errno, unistd::Pid};
 
 pub mod reader;
 pub mod writer;
+pub mod address;
+
 pub use reader::ProcessReader;
 pub use writer::ProcessWriter;
+pub use address::Address;
+
+const POINTER_WIDTH: usize = usize::BITS as usize / 8;
 
 fn get_process_status_name(file: &str) -> io::Result<String> {
     let data = read_to_string(file)?;
@@ -239,6 +244,22 @@ impl Process {
         self.write_word(self.base.unwrap() + offset, data)
     }
 
+    /// Resolves a chain of pointer offsets.
+    pub fn pointer_chain(&mut self, offsets: Vec<usize>) -> io::Result<usize> {
+        let mut address = self.base()? + offsets[0];
+        let mut reader = self.reader(address, POINTER_WIDTH)?.no_advance();
+
+        let mut address_bytes = [0; POINTER_WIDTH];
+        for offset in offsets.iter().skip(1) {
+            reader.goto_addr(address);
+            reader.read(&mut address_bytes)?;
+            address = usize::from_le_bytes(address_bytes);
+            address += offset;
+        }
+
+        Ok(address)
+    }
+
     /// Returns the pid of the attached process.
     pub fn pid(&self) -> Pid {
         self.pid
@@ -249,20 +270,34 @@ impl Process {
         self.name.clone()
     }
 
+    /// Returns the base address of the attached process.
+    pub fn base(&mut self) -> io::Result<usize> {
+        self.get_base()?;
+        Ok(self.base.unwrap())
+    }
+
     /// Returns a `ProcessReader` for this process, good for `length` bytes.
-    ///
-    /// The reader has a mutable reference to this struct, so you *must* drop it before
-    /// doing anything else with the process.
-    pub fn reader(&mut self, offset: usize, length: usize) -> ProcessReader {
-        ProcessReader::new(self, offset, length)
+    pub fn reader(&mut self, offset: usize, length: usize) -> io::Result<ProcessReader> {
+        self.get_base()?;
+        Ok(ProcessReader::new(self, offset, length))
     }
 
     /// Returns a `ProcessWriter` for this process.
-    ///
-    /// The writer has a mutable reference to this struct, so you *must* drop it before
-    /// doing anything else with the process.
-    pub fn writer(&mut self, offset: usize) -> ProcessWriter {
-        ProcessWriter::new(self, offset)
+    pub fn writer(&mut self, offset: usize) -> io::Result<ProcessWriter> {
+        self.get_base()?;
+        Ok(ProcessWriter::new(self, offset))
+    }
+
+    /// Returns a `ProcessReader` for this process, good for `length` bytes, starting at `address`.
+    pub fn reader_addr(&mut self, address: usize, length: usize) -> io::Result<ProcessReader> {
+        let base = self.base()?;
+        Ok(ProcessReader::new(self, address - base, length))
+    }
+
+    /// Returns a `ProcessWriter` for this process, starting at `address`.
+    pub fn writer_addr(&mut self, address: usize) -> io::Result<ProcessWriter> {
+        let base = self.base()?;
+        Ok(ProcessWriter::new(self, address - base))
     }
 }
 
