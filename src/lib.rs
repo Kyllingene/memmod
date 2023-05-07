@@ -1,5 +1,5 @@
 use std::{
-    io::{self, ErrorKind},
+    io::{self, ErrorKind, Read},
     fs::{read_dir, read_to_string},
     os::raw::c_void,
     ptr::null,
@@ -18,14 +18,12 @@ pub use nix::{
     unistd::Pid,
 };
 
-#[cfg(target_pointer_width = "64")]
-pub type Address = u64;
+pub mod reader;
+pub mod writer;
+pub use reader::ProcessReader;
+pub use writer::ProcessWriter;
 
-#[cfg(target_pointer_width = "32")]
-pub type Address = u32;
-
-#[cfg(target_pointer_width = "16")]
-pub type Address = u16;
+pub type Address = usize;
 
 fn get_process_status_name(file: &str) -> io::Result<String> {
     let data = read_to_string(file)?;
@@ -175,6 +173,21 @@ impl Process {
     pub fn pid(&self) -> Pid {
         self.pid
     }
+
+    pub fn reader<'a>(&'a mut self, offset: Address, length: usize) -> ProcessReader<'a> {
+        ProcessReader::new(
+            self,
+            offset,
+            length
+        )
+    }
+
+    pub fn writer<'a>(&'a mut self, offset: Address) -> ProcessWriter<'a> {
+        ProcessWriter::new(
+            self,
+            offset
+        )
+    }
 }
 
 impl Drop for Process {
@@ -191,5 +204,17 @@ impl Drop for Process {
                 self.pid
             );
         }
+    }
+}
+
+impl Read for Process {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let data = self.read_word_offset(0)?;
+
+        for i in 0..4.min(buf.len()) {
+            buf[i] =  ((data >> (i * 8)) & 0xff) as u8;
+        }
+
+        Ok(4.min(buf.len()))
     }
 }
