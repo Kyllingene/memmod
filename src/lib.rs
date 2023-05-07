@@ -15,11 +15,9 @@ pub use nix::{errno::Errno, unistd::Pid};
 
 pub mod reader;
 pub mod writer;
-pub mod address;
 
 pub use reader::ProcessReader;
 pub use writer::ProcessWriter;
-pub use address::Address;
 
 const POINTER_WIDTH: usize = usize::BITS as usize / 8;
 
