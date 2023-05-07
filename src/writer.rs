@@ -1,22 +1,47 @@
-use std::io::{Write, self};
+use std::{
+    io::{self, Write},
+    ops::{Deref, DerefMut},
+};
+
 use crate::Process;
 
-
+/// A writer for a process.
+///
+/// Subsequent writes advance the reader through the process'
+/// memory by default. To disable this behavior, call
+/// `ProcessWriter::no_advance`.
+///
+/// Can be dereferenced to the underlying `Process`.
 #[derive(Debug)]
 pub struct ProcessWriter<'a> {
     proc: &'a mut Process,
 
     offset: usize,
     data: Vec<u8>,
+    advance: bool,
 }
 
 impl<'a> ProcessWriter<'a> {
+    /// Create a new process writer. Advances by default.
     pub fn new(proc: &'a mut Process, offset: usize) -> Self {
         Self {
             proc,
             offset,
             data: Vec::new(),
+            advance: true,
         }
+    }
+
+    /// Disables advancing through memory.
+    pub fn no_advance(mut self) -> Self {
+        self.advance = false;
+        self
+    }
+
+    /// Enables advancing through memory.
+    pub fn advance(mut self) -> Self {
+        self.advance = true;
+        self
     }
 }
 
@@ -62,9 +87,26 @@ impl<'a> Write for ProcessWriter<'a> {
             }
         }
 
-        self.offset += self.data.len();
+        if self.advance {
+            self.offset += self.data.len();
+        }
+
         self.data.clear();
 
         Ok(())
+    }
+}
+
+impl<'a> Deref for ProcessWriter<'a> {
+    type Target = Process;
+
+    fn deref(&self) -> &Self::Target {
+        self.proc
+    }
+}
+
+impl<'a> DerefMut for ProcessWriter<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.proc
     }
 }

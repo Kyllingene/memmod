@@ -1,22 +1,17 @@
 use std::{
-    io::{self, ErrorKind, Read},
     fs::{read_dir, read_to_string},
+    io::{self, ErrorKind},
     os::raw::c_void,
     ptr::null,
 };
 
-use nix::{
-    sys::{
-        ptrace,
-        signal::{self, Signal},
-        wait::waitpid,
-    },
+use nix::sys::{
+    ptrace,
+    signal::{self, Signal},
+    wait::waitpid,
 };
 
-pub use nix::{
-    errno::Errno,
-    unistd::Pid,
-};
+pub use nix::{errno::Errno, unistd::Pid};
 
 pub mod reader;
 pub mod writer;
@@ -30,13 +25,28 @@ fn get_process_status_name(file: &str) -> io::Result<String> {
         return Ok(name.to_string());
     }
 
-    Err(io::Error::new(ErrorKind::NotFound, format!("Failed to find name in {file}")))
+    Err(io::Error::new(
+        ErrorKind::NotFound,
+        format!("Failed to find name in {file}"),
+    ))
 }
 
 fn check_process_status_file(file: &str, target: &str) -> io::Result<bool> {
     Ok(get_process_status_name(file)?.contains(target))
 }
 
+fn check_process_status_file_strict(file: &str, target: &str) -> io::Result<bool> {
+    Ok(get_process_status_name(file)? == target)
+}
+
+/// An attached process.
+///
+/// To attach to a process, call `Process::new(pid)`. To find a process by
+/// name (just checks for string inclusion), use `Process::find(name)`. To
+/// detach from a process, drop this struct.
+///
+/// Attaching to a process, as well as reading/writing its memory, stops
+/// the process. To continue it, use `Process::cont()`, or detach.
 #[derive(Debug)]
 pub struct Process {
     pid: Pid,
@@ -47,21 +57,28 @@ pub struct Process {
 }
 
 impl Process {
+    /// Attach to a process.
+    ///
+    /// Also reads its name from `/proc/<pid>/status`. If that fails, so will
+    /// the method.
     pub fn new(pid: Pid) -> io::Result<Self> {
+        // Call this first in case it fails
+        let name = get_process_status_name(&format!("/proc/{pid}/status"))?;
+
         ptrace::attach(pid)?;
         waitpid(pid, None)?;
-
-        let name = get_process_status_name(&format!("/proc/{pid}/status"))?;
 
         Ok(Self {
             pid,
             stopped: true,
-            
+
             name,
             base: None,
         })
     }
 
+    /// Finds a process by name, then calls `Process::new`. Simply checks for string inclusion (e.g.
+    /// `myapp` will match both `./myapp --gui` and `find / | grep myapp`, whichever has a lower pid).
     pub fn find(target: &str) -> io::Result<Self> {
         let dir = read_dir("/proc")?;
 
@@ -80,15 +97,54 @@ impl Process {
                 &format!("/proc/{}/status", entry.file_name().to_string_lossy()),
                 target,
             )? {
-                return Ok(Self::new(Pid::from_raw(
+                return Self::new(Pid::from_raw(
                     entry.file_name().to_string_lossy().parse().unwrap(),
-                ))?);
+                ));
             }
         }
 
-        Err(io::Error::new(ErrorKind::NotFound, format!("Failed to find process `{target}`")))
+        Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("Failed to find process `{target}`"),
+        ))
     }
 
+    /// Finds a process by name, then calls `Process::new`. Only allows strict matches (e.g.
+    /// `myapp` won't match `./myapp --gui` and `find / | grep myapp`).
+    pub fn find_strict(target: &str) -> io::Result<Self> {
+        let dir = read_dir("/proc")?;
+
+        for entry in dir {
+            let entry = entry?;
+            if !entry
+                .file_name()
+                .to_string_lossy()
+                .chars()
+                .all(char::is_numeric)
+            {
+                continue;
+            }
+
+            if check_process_status_file_strict(
+                &format!("/proc/{}/status", entry.file_name().to_string_lossy()),
+                target,
+            )? {
+                return Self::new(Pid::from_raw(
+                    entry.file_name().to_string_lossy().parse().unwrap(),
+                ));
+            }
+        }
+
+        Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("Failed to find process `{target}`"),
+        ))
+    }
+
+    /// Gets the base address of the process' r/w memory (the first entry in `/proc/<pid>/maps` that
+    /// contains both `rw-p` and the process name).
+    ///
+    /// If it hasn't been called yet, calling `<read/write>_word_offset` will call this first.
     pub fn get_base(&mut self) -> io::Result<()> {
         if self.base.is_some() {
             return Ok(());
@@ -99,17 +155,27 @@ impl Process {
         let data = read_to_string(file)?;
         for line in data.lines() {
             if line.contains("rw-p") && line.contains(&self.name) {
-                let (base, _) = line.split_once('-')
-                    .ok_or(Errno::ENOKEY)?;
+                let (base, _) = line.split_once('-').ok_or(Errno::ENOKEY)?;
 
-                self.base = Some(usize::from_str_radix(base, 16).map_err(|_| io::Error::new(ErrorKind::InvalidData, format!("Bad format in /proc/{}/maps", self.pid)))?);
+                self.base = Some(usize::from_str_radix(base, 16).map_err(|_| {
+                    io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("Bad format in /proc/{}/maps", self.pid),
+                    )
+                })?);
                 return Ok(());
             }
         }
 
-        Err(io::Error::new(ErrorKind::NotFound, format!("No suitable mapping in /proc/{}/maps", self.pid)))
+        Err(io::Error::new(
+            ErrorKind::NotFound,
+            format!("No suitable mapping in /proc/{}/maps", self.pid),
+        ))
     }
 
+    /// Halts the process.
+    ///
+    /// Called before all read/write operations.
     pub fn stop(&mut self) -> io::Result<()> {
         if !self.stopped {
             signal::kill(self.pid, Signal::SIGSTOP)?;
@@ -120,6 +186,9 @@ impl Process {
         Ok(())
     }
 
+    /// Continues the process.
+    ///
+    /// This is never called automatically.
     pub fn cont(&mut self) -> io::Result<()> {
         if self.stopped {
             signal::kill(self.pid, Signal::SIGCONT)?;
@@ -129,32 +198,31 @@ impl Process {
         Ok(())
     }
 
-    pub fn read_word(&mut self, usize: usize) -> io::Result<i64> {
+    /// Reads a single i64 from the process' memory.
+    pub fn read_word(&mut self, address: usize) -> io::Result<i64> {
         self.stop()?;
 
-        let addr = unsafe {
-            null::<c_void>().offset(usize as isize) as *mut c_void
-        };
+        let addr = unsafe { null::<c_void>().add(address) as *mut c_void };
 
         let data = ptrace::read(self.pid, addr)?;
         Ok(data)
     }
 
+    /// Reads a single i64 from the process' memory, using `offset`.
+    ///
+    /// If `Process::get_base()` hasn't been called yet, calls that first.
     pub fn read_word_offset(&mut self, offset: usize) -> io::Result<i64> {
         self.get_base()?;
         self.read_word(self.base.unwrap() + offset)
     }
 
+    /// Writes a single i64 into the process' memory.
     pub fn write_word(&mut self, usize: usize, data: i64) -> io::Result<()> {
         self.stop()?;
 
-        let addr = unsafe {
-            null::<c_void>().offset(usize as isize) as *mut c_void
-        };
+        let addr = unsafe { null::<c_void>().add(usize) as *mut c_void };
 
-        let data = unsafe {
-            null::<c_void>().offset(data as isize) as *mut c_void
-        };
+        let data = unsafe { null::<c_void>().offset(data as isize) as *mut c_void };
 
         unsafe {
             ptrace::write(self.pid, addr, data)?;
@@ -163,28 +231,38 @@ impl Process {
         Ok(())
     }
 
+    /// Writes a single i64 into the process' memory, using `offset`.
+    ///
+    /// If `Process::get_base()` hasn't been called yet, calls that first.
     pub fn write_word_offset(&mut self, offset: usize, data: i64) -> io::Result<()> {
         self.get_base()?;
         self.write_word(self.base.unwrap() + offset, data)
     }
 
+    /// Returns the pid of the attached process.
     pub fn pid(&self) -> Pid {
         self.pid
     }
 
-    pub fn reader<'a>(&'a mut self, offset: usize, length: usize) -> ProcessReader<'a> {
-        ProcessReader::new(
-            self,
-            offset,
-            length
-        )
+    /// Returns the full name of the attached process.
+    pub fn name(&self) -> String {
+        self.name.clone()
     }
 
-    pub fn writer<'a>(&'a mut self, offset: usize) -> ProcessWriter<'a> {
-        ProcessWriter::new(
-            self,
-            offset
-        )
+    /// Returns a `ProcessReader` for this process, good for `length` bytes.
+    ///
+    /// The reader has a mutable reference to this struct, so you *must* drop it before
+    /// doing anything else with the process.
+    pub fn reader(&mut self, offset: usize, length: usize) -> ProcessReader {
+        ProcessReader::new(self, offset, length)
+    }
+
+    /// Returns a `ProcessWriter` for this process.
+    ///
+    /// The writer has a mutable reference to this struct, so you *must* drop it before
+    /// doing anything else with the process.
+    pub fn writer(&mut self, offset: usize) -> ProcessWriter {
+        ProcessWriter::new(self, offset)
     }
 }
 
@@ -202,17 +280,5 @@ impl Drop for Process {
                 self.pid
             );
         }
-    }
-}
-
-impl Read for Process {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let data = self.read_word_offset(0)?;
-
-        for i in 0..4.min(buf.len()) {
-            buf[i] =  ((data >> (i * 8)) & 0xff) as u8;
-        }
-
-        Ok(4.min(buf.len()))
     }
 }
