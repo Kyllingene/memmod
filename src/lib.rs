@@ -243,22 +243,12 @@ impl Process {
     }
 
     /// Resolves a chain of pointer offsets.
-	/// 
-	/// The first offset is from the process itself.
-    pub fn pointer_chain(&mut self, offsets: Vec<isize>) -> io::Result<usize> {
-        let mut address = self.base()?;
-
-		if offsets[0] >= 0 {
-			address += offsets[0] as usize;
-		} else {
-			address -= offsets[0].unsigned_abs();
-		}
-        
+    pub fn pointer_chain(&mut self, mut address: usize, offsets: Vec<isize>) -> io::Result<usize> {        
         let mut reader = self.reader(address, POINTER_WIDTH)?.no_advance();
 
         let mut address_bytes = [0; POINTER_WIDTH];
-        for offset in offsets.iter().skip(1) {
-            reader.goto_addr(address);
+        for offset in offsets.iter() {
+            reader.goto(address);
             reader.read_exact(&mut address_bytes)?;
             address = usize::from_le_bytes(address_bytes);
 
@@ -267,6 +257,7 @@ impl Process {
        		} else {
        			address -= offset.unsigned_abs();
        		}
+
         }
 
         Ok(address)
@@ -289,15 +280,27 @@ impl Process {
     }
 
     /// Returns a `ProcessReader` for this process, good for `length` bytes.
-    pub fn reader(&mut self, offset: usize, length: usize) -> io::Result<ProcessReader> {
+    pub fn reader(&mut self, address: usize, length: usize) -> io::Result<ProcessReader> {
         self.get_base()?;
-        Ok(ProcessReader::new(self, offset, length))
+        Ok(ProcessReader::new(self, address, length))
     }
 
     /// Returns a `ProcessWriter` for this process.
-    pub fn writer(&mut self, offset: usize) -> io::Result<ProcessWriter> {
+    pub fn writer(&mut self, address: usize) -> io::Result<ProcessWriter> {
         self.get_base()?;
-        Ok(ProcessWriter::new(self, offset))
+        Ok(ProcessWriter::new(self, address))
+    }
+
+    /// Returns a `ProcessReader` for this process, good for `length` bytes, starting at `offset`.
+    pub fn reader_offset(&mut self, offset: isize, length: usize) -> io::Result<ProcessReader> {
+        self.get_base()?;
+        Ok(ProcessReader::offset(self, offset, length))
+    }
+
+    /// Returns a `ProcessWriter` for this process, starting at `offset`.
+    pub fn writer_offset(&mut self, offset: isize) -> io::Result<ProcessWriter> {
+        self.get_base()?;
+        Ok(ProcessWriter::offset(self, offset))
     }
 
     /// Returns a `ProcessReader` for this process, good for `length` bytes, starting at `address`.

@@ -16,17 +16,33 @@ use crate::Process;
 pub struct ProcessWriter<'a> {
     proc: &'a mut Process,
 
-    offset: usize,
+    address: usize,
     data: Vec<u8>,
     advance: bool,
 }
 
 impl<'a> ProcessWriter<'a> {
     /// Create a new process writer. Advances by default.
-    pub fn new(proc: &'a mut Process, offset: usize) -> Self {
+    pub fn new(proc: &'a mut Process, address: usize) -> Self {
         Self {
             proc,
-            offset,
+            address,
+            data: Vec::new(),
+            advance: true,
+        }
+    }
+
+    /// Create a new process writer. Advances by default.
+    pub fn offset(proc: &'a mut Process, offset: isize) -> Self {
+        let base = proc.base.unwrap();
+        let address = if offset >= 0 {
+            base + offset as usize
+        } else {
+            base - offset as usize
+        };
+        Self {
+            proc,
+            address,
             data: Vec::new(),
             advance: true,
         }
@@ -44,14 +60,18 @@ impl<'a> ProcessWriter<'a> {
         self
     }
 
-    /// Jumps to an offset in memory.
-    pub fn goto(&mut self, offset: usize) {
-        self.offset = offset;
-    }
-
     /// Jumps to an address in memory.
-    pub fn goto_addr(&mut self, address: usize) {
-        self.offset = address - self.proc.base.unwrap();
+    pub fn goto(&mut self, address: usize) {
+        self.address = address;
+    }
+    
+    /// Jumps to an offset in memory.
+    pub fn goto_offset(&mut self, offset: isize) {
+        self.address = if offset >= 0 {
+            self.proc.base().unwrap() + offset as usize
+        } else {
+            self.proc.base().unwrap() - offset as usize
+        };
     }
 }
 
@@ -82,23 +102,23 @@ impl<'a> Write for ProcessWriter<'a> {
                     word |= (self.data[i] as i64) << ((i % 8) * 8);
                 }
 
-                let mut source = self.proc.read_word_offset(self.offset + wordi * 8)?;
+                let mut source = self.proc.read_word(self.address + wordi * 8)?;
                 source &= i64::MAX >> (difference * 8);
                 word |= source;
 
-                self.proc.write_word_offset(self.offset + wordi * 8, word)?;
+                self.proc.write_word(self.address + wordi * 8, word)?;
 
                 break;
             }
 
             if (i + 1) % 8 == 0 {
-                self.proc.write_word_offset(self.offset + wordi * 8, word)?;
+                self.proc.write_word(self.address + wordi * 8, word)?;
                 wordi += 1;
             }
         }
 
         if self.advance {
-            self.offset += self.data.len();
+            self.address += self.data.len();
         }
 
         self.data.clear();
