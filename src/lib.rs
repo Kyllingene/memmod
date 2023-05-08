@@ -243,16 +243,30 @@ impl Process {
     }
 
     /// Resolves a chain of pointer offsets.
-    pub fn pointer_chain(&mut self, offsets: Vec<usize>) -> io::Result<usize> {
-        let mut address = self.base()? + offsets[0];
+	/// 
+	/// The first offset is from the process itself.
+    pub fn pointer_chain(&mut self, offsets: Vec<isize>) -> io::Result<usize> {
+        let mut address = self.base()?;
+
+		if offsets[0] >= 0 {
+			address += offsets[0] as usize;
+		} else {
+			address -= offsets[0].unsigned_abs();
+		}
+        
         let mut reader = self.reader(address, POINTER_WIDTH)?.no_advance();
 
         let mut address_bytes = [0; POINTER_WIDTH];
         for offset in offsets.iter().skip(1) {
             reader.goto_addr(address);
-            reader.read(&mut address_bytes)?;
+            reader.read_exact(&mut address_bytes)?;
             address = usize::from_le_bytes(address_bytes);
-            address += offset;
+
+            if *offset >= 0 {
+       			address += *offset as usize;
+       		} else {
+       			address -= offset.unsigned_abs();
+       		}
         }
 
         Ok(address)
