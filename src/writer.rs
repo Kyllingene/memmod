@@ -140,3 +140,13 @@ impl<'a> DerefMut for ProcessWriter<'a> {
         self.proc
     }
 }
+
+impl<'a> Drop for ProcessWriter<'a> {
+    fn drop(&mut self) {
+        if !self.data.is_empty() {
+            if let Err(e) = self.flush() {
+                panic!("Writer for process {} (at 0x{:x}) dropped without flushing, but an error occurred while flushing: {e}", self.pid, self.address);
+            }
+        }
+    }
+}

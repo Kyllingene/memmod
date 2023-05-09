@@ -184,6 +184,7 @@ impl Process {
             signal::kill(self.pid, Signal::SIGSTOP)?;
             waitpid(self.pid, None)?;
             self.stopped = true;
+            println!("Stopped: {}", self.stopped);
         }
 
         Ok(())
@@ -196,6 +197,7 @@ impl Process {
         if self.stopped {
             signal::kill(self.pid, Signal::SIGCONT)?;
             self.stopped = false;
+            println!("Continued: {}", self.stopped);
         }
 
         Ok(())
