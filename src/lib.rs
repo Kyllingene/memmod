@@ -46,7 +46,8 @@ fn check_process_status_file_strict(file: &str, target: &str) -> io::Result<bool
 ///
 /// To attach to a process, call `Process::new(pid)`. To find a process by
 /// name (just checks for string inclusion), use `Process::find(name)`. To
-/// detach from a process, drop this struct.
+/// detach from a process, drop this struct (or call `Process::detach()` for
+/// proper error handling).
 ///
 /// Attaching to a process, as well as reading/writing its memory, stops
 /// the process. To continue it, use `Process::cont()`, or detach.
@@ -196,10 +197,32 @@ impl Process {
         if self.stopped {
             signal::kill(self.pid, Signal::SIGCONT)?;
             self.stopped = false;
-            println!("Continued: {}", self.stopped);
         }
 
         Ok(())
+    }
+
+    /// Detaches from the process.
+    /// 
+    /// This consumes the struct.
+    pub fn detach(self) -> io::Result<()> {
+        let sig = if self.stopped {
+            Some(Signal::SIGCONT)
+        } else {
+            None
+        };
+
+        ptrace::detach(self.pid, sig).map_err(Errno::into)
+    }
+
+    fn detach_without_consuming(&mut self) -> io::Result<()> {
+        let sig = if self.stopped {
+            Some(Signal::SIGCONT)
+        } else {
+            None
+        };
+
+        ptrace::detach(self.pid, sig).map_err(Errno::into)
     }
 
     /// Reads a single i64 from the process' memory.
@@ -258,7 +281,6 @@ impl Process {
        		} else {
        			address -= offset.unsigned_abs();
        		}
-
         }
 
         Ok(address)
@@ -307,15 +329,9 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        let sig = if self.stopped {
-            Some(Signal::SIGCONT)
-        } else {
-            None
-        };
-
-        if let Err(e) = ptrace::detach(self.pid, sig) {
+        if let Err(e) = self.detach_without_consuming() {
             panic!(
-                "Failed to detach from process {} (tried to send signal {sig:?}): {e}",
+                "Failed to detach from process {}: {e}",
                 self.pid
             );
         }

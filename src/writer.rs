@@ -103,7 +103,7 @@ impl<'a> Write for ProcessWriter<'a> {
                 }
 
                 let mut source = self.proc.read_word(self.address + wordi * 8)?;
-                source &= i64::MAX >> (difference * 8);
+                source &= i64::MAX << (difference * 8);
                 word |= source;
 
                 self.proc.write_word(self.address + wordi * 8, word)?;
