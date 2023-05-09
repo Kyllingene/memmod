@@ -85,7 +85,7 @@ impl<'a> Read for ProcessReader<'a> {
             let word = self.proc.read_word(self.address + i)?;
 
             for j in 0..8 {
-                buf[i + j] = ((word >> (j * 8)) & 0xff) as u8;
+                buf[i + j] = (word >> (j * 8)) as u8;
             }
         }
 
