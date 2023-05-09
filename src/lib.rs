@@ -220,10 +220,10 @@ impl Process {
     }
 
     /// Writes a single i64 into the process' memory.
-    pub fn write_word(&mut self, usize: usize, data: i64) -> io::Result<()> {
+    pub fn write_word(&mut self, address: usize, data: i64) -> io::Result<()> {
         self.stop()?;
 
-        let addr = unsafe { null::<c_void>().add(usize) as *mut c_void };
+        let addr = unsafe { null::<c_void>().add(address) as *mut c_void };
 
         let data = unsafe { null::<c_void>().offset(data as isize) as *mut c_void };
 
@@ -279,13 +279,13 @@ impl Process {
         Ok(self.base.unwrap())
     }
 
-    /// Returns a `ProcessReader` for this process, good for `length` bytes.
+    /// Returns a `ProcessReader` for this process, good for `length` bytes, starting at `address`.
     pub fn reader(&mut self, address: usize, length: usize) -> io::Result<ProcessReader> {
         self.get_base()?;
         Ok(ProcessReader::new(self, address, length))
     }
 
-    /// Returns a `ProcessWriter` for this process.
+    /// Returns a `ProcessWriter` for this process, starting at `address`.
     pub fn writer(&mut self, address: usize) -> io::Result<ProcessWriter> {
         self.get_base()?;
         Ok(ProcessWriter::new(self, address))
@@ -301,18 +301,6 @@ impl Process {
     pub fn writer_offset(&mut self, offset: isize) -> io::Result<ProcessWriter> {
         self.get_base()?;
         Ok(ProcessWriter::offset(self, offset))
-    }
-
-    /// Returns a `ProcessReader` for this process, good for `length` bytes, starting at `address`.
-    pub fn reader_addr(&mut self, address: usize, length: usize) -> io::Result<ProcessReader> {
-        let base = self.base()?;
-        Ok(ProcessReader::new(self, address - base, length))
-    }
-
-    /// Returns a `ProcessWriter` for this process, starting at `address`.
-    pub fn writer_addr(&mut self, address: usize) -> io::Result<ProcessWriter> {
-        let base = self.base()?;
-        Ok(ProcessWriter::new(self, address - base))
     }
 }
 
