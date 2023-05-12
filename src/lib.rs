@@ -49,8 +49,8 @@ fn check_process_status_file_strict(file: &str, target: &str) -> io::Result<bool
 /// detach from a process, drop this struct (or call `Process::detach()` for
 /// proper error handling).
 ///
-/// Attaching to a process, as well as reading/writing its memory, stops
-/// the process. To continue it, use `Process::cont()`, or detach.
+/// Modifying a process' memory stops the process. To continue it, use `Process::cont()`,
+/// or detach. Reading does not stop the process; you must stop it yourself.
 #[derive(Debug)]
 pub struct Process {
     pid: Pid,
@@ -71,10 +71,12 @@ impl Process {
 
         ptrace::attach(pid)?;
         waitpid(pid, None)?;
+        ptrace::cont(pid, None)?;
+        waitpid(pid, None)?;
 
         Ok(Self {
             pid,
-            stopped: true,
+            stopped: false,
 
             name,
             base: None,
@@ -145,8 +147,7 @@ impl Process {
         ))
     }
 
-    /// Gets the base address of the process' r/w memory (the first entry in `/proc/<pid>/maps` that
-    /// contains both `rw-p` and the process name).
+    /// Gets the base address of the process' memory (the first mapping in /proc/pid/maps).
     ///
     /// If it hasn't been called yet, calling `<read/write>_word_offset` will call this first.
     pub fn get_base(&mut self) -> io::Result<()> {
@@ -157,24 +158,16 @@ impl Process {
         let file = format!("/proc/{}/maps", self.pid);
 
         let data = read_to_string(file)?;
-        for line in data.lines() {
-            if line.contains("rw-p") && line.contains(&self.name) {
-                let (base, _) = line.split_once('-').ok_or(Errno::ENOKEY)?;
-
-                self.base = Some(usize::from_str_radix(base, 16).map_err(|_| {
-                    io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("Bad format in /proc/{}/maps", self.pid),
-                    )
-                })?);
-                return Ok(());
-            }
-        }
-
-        Err(io::Error::new(
-            ErrorKind::NotFound,
-            format!("No suitable mapping in /proc/{}/maps", self.pid),
-        ))
+		let line = data.lines().next().ok_or(Errno::ENOKEY)?;
+		let (base, _) = line.split_once('-').ok_or(Errno::ENOKEY)?;
+        self.base = Some(usize::from_str_radix(base, 16).map_err(|_| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Bad format in /proc/{}/maps", self.pid),
+            )
+        })?);
+        
+        Ok(())
     }
 
     /// Halts the process.
@@ -205,14 +198,8 @@ impl Process {
     /// Detaches from the process.
     /// 
     /// This consumes the struct.
-    pub fn detach(self) -> io::Result<()> {
-        let sig = if self.stopped {
-            Some(Signal::SIGCONT)
-        } else {
-            None
-        };
-
-        ptrace::detach(self.pid, sig).map_err(Errno::into)
+    pub fn detach(mut self) -> io::Result<()> {
+        self.detach_without_consuming()
     }
 
     fn detach_without_consuming(&mut self) -> io::Result<()> {
@@ -225,31 +212,29 @@ impl Process {
         ptrace::detach(self.pid, sig).map_err(Errno::into)
     }
 
-    /// Reads a single i64 from the process' memory.
-    pub fn read_word(&mut self, address: usize) -> io::Result<i64> {
-        self.stop()?;
-
+    /// Reads a single word from the process' memory.
+    pub fn read_word(&mut self, address: usize) -> io::Result<isize> {
         let addr = unsafe { null::<c_void>().add(address) as *mut c_void };
 
-        let data = ptrace::read(self.pid, addr)?;
+        let data = ptrace::read(self.pid, addr)? as isize;
         Ok(data)
     }
 
-    /// Reads a single i64 from the process' memory, using `offset`.
+    /// Reads a single word from the process' memory, using `offset`.
     ///
     /// If `Process::get_base()` hasn't been called yet, calls that first.
-    pub fn read_word_offset(&mut self, offset: usize) -> io::Result<i64> {
+    pub fn read_word_offset(&mut self, offset: usize) -> io::Result<isize> {
         self.get_base()?;
         self.read_word(self.base.unwrap() + offset)
     }
 
-    /// Writes a single i64 into the process' memory.
-    pub fn write_word(&mut self, address: usize, data: i64) -> io::Result<()> {
+    /// Writes a single word into the process' memory.
+    pub fn write_word(&mut self, address: usize, data: isize) -> io::Result<()> {
         self.stop()?;
 
         let addr = unsafe { null::<c_void>().add(address) as *mut c_void };
 
-        let data = unsafe { null::<c_void>().offset(data as isize) as *mut c_void };
+        let data = unsafe { null::<c_void>().offset(data) as *mut c_void };
 
         unsafe {
             ptrace::write(self.pid, addr, data)?;
@@ -258,10 +243,10 @@ impl Process {
         Ok(())
     }
 
-    /// Writes a single i64 into the process' memory, using `offset`.
+    /// Writes a single word into the process' memory, using `offset`.
     ///
     /// If `Process::get_base()` hasn't been called yet, calls that first.
-    pub fn write_word_offset(&mut self, offset: usize, data: i64) -> io::Result<()> {
+    pub fn write_word_offset(&mut self, offset: usize, data: isize) -> io::Result<()> {
         self.get_base()?;
         self.write_word(self.base.unwrap() + offset, data)
     }

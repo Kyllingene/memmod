@@ -92,18 +92,18 @@ impl<'a> Write for ProcessWriter<'a> {
                 word = 0;
             }
 
-            word |= (self.data[i] as i64) << ((i % 8) * 8);
+            word |= (self.data[i] as isize) << ((i % 8) * 8);
 
             if self.data.len() % 8 != 0 && i / 8 == self.data.len() / 8 {
                 let difference = self.data.len() - i;
                 i += 1;
 
                 for i in i..self.data.len() {
-                    word |= (self.data[i] as i64) << ((i % 8) * 8);
+                    word |= (self.data[i] as isize) << ((i % 8) * 8);
                 }
 
                 let mut source = self.proc.read_word(self.address + wordi * 8)?;
-                source &= i64::MAX << (difference * 8);
+                source &= isize::MAX << (difference * 8);
                 word |= source;
 
                 self.proc.write_word(self.address + wordi * 8, word)?;

@@ -28,7 +28,7 @@ impl<'a> ProcessReader<'a> {
     pub fn new(proc: &'a mut Process, address: usize, length: usize) -> Self {
         Self {
             proc,
-            address: address,
+            address,
             length,
             advance: true,
         }

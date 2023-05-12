@@ -1,10 +1,7 @@
 [package]
 name = "memmod"
-version = "1.4.1"
+version = "2.0.0"
 edition = "2021"
-
-# Currently indev
-publish = false
 
 license = "MIT"
 repository = "https://github.com/kyllingene/memmod"
