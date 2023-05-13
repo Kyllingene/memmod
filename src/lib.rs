@@ -5,13 +5,37 @@ use std::{
     ptr::null,
 };
 
-use nix::sys::{
-    ptrace,
-    signal::{self, Signal},
-    wait::waitpid,
+#[cfg(unix)]
+pub mod unix;
+
+#[cfg(unix)]
+use unix::{
+    read_process_word,
+    write_process_word,
+    check_process_name,
+    check_process_name_strict,
+    get_process_name,
+    get_process_handle,
+    Handle
 };
 
-pub use nix::{errno::Errno, unistd::Pid};
+#[cfg(unix)]
+pub use nix::unistd::Pid;
+
+#[cfg(windows)]
+pub mod windows_utils;
+
+use windows_utils::{find_process, get_base};
+#[cfg(windows)]
+use windows_utils::{
+    read_process_word,
+    write_process_word,
+    check_process_name,
+    check_process_name_strict,
+    get_process_name,
+    get_process_handle,
+    Handle
+};
 
 pub mod reader;
 pub mod writer;
@@ -20,27 +44,6 @@ pub use reader::ProcessReader;
 pub use writer::ProcessWriter;
 
 const POINTER_WIDTH: usize = usize::BITS as usize / 8;
-
-fn get_process_status_name(file: &str) -> io::Result<String> {
-    let data = read_to_string(file)?;
-    let line = data.lines().next().expect("Bad /proc/*/status format");
-    if let Some(name) = line.strip_prefix("Name:\t") {
-        return Ok(name.to_string());
-    }
-
-    Err(io::Error::new(
-        ErrorKind::NotFound,
-        format!("Failed to find name in {file}"),
-    ))
-}
-
-fn check_process_status_file(file: &str, target: &str) -> io::Result<bool> {
-    Ok(get_process_status_name(file)?.contains(target))
-}
-
-fn check_process_status_file_strict(file: &str, target: &str) -> io::Result<bool> {
-    Ok(get_process_status_name(file)? == target)
-}
 
 /// An attached process.
 ///
@@ -53,7 +56,7 @@ fn check_process_status_file_strict(file: &str, target: &str) -> io::Result<bool
 /// or detach. Reading does not stop the process; you must stop it yourself.
 #[derive(Debug)]
 pub struct Process {
-    pid: Pid,
+    handle: Handle,
     stopped: bool,
 
     name: String,
@@ -62,20 +65,19 @@ pub struct Process {
 
 impl Process {
     /// Attach to a process.
-    ///
-    /// Also reads its name from `/proc/<pid>/status`. If that fails, so will
-    /// the method.
-    pub fn new(pid: Pid) -> io::Result<Self> {
-        // Call this first in case it fails
-        let name = get_process_status_name(&format!("/proc/{pid}/status"))?;
+    // ///
+    // /// Also reads its name from `/proc/<pid>/status`. If that fails, so will
+    // /// the method.
+    pub fn new(pid: i32) -> io::Result<Self> {
+        let handle = get_process_handle(pid)?;
+        Self::from_handle(handle)
+    }
 
-        ptrace::attach(pid)?;
-        waitpid(pid, None)?;
-        ptrace::cont(pid, None)?;
-        waitpid(pid, None)?;
+    fn from_handle(handle: Handle) -> io::Result<Self> {
+        let name = get_process_name(handle)?;
 
         Ok(Self {
-            pid,
+            handle,
             stopped: false,
 
             name,
@@ -86,65 +88,13 @@ impl Process {
     /// Finds a process by name, then calls `Process::new`. Simply checks for string inclusion (e.g.
     /// `myapp` will match both `./myapp --gui` and `find / | grep myapp`, whichever has a lower pid).
     pub fn find(target: &str) -> io::Result<Self> {
-        let dir = read_dir("/proc")?;
-
-        for entry in dir {
-            let entry = entry?;
-            if !entry
-                .file_name()
-                .to_string_lossy()
-                .chars()
-                .all(char::is_numeric)
-            {
-                continue;
-            }
-
-            if check_process_status_file(
-                &format!("/proc/{}/status", entry.file_name().to_string_lossy()),
-                target,
-            )? {
-                return Self::new(Pid::from_raw(
-                    entry.file_name().to_string_lossy().parse().unwrap(),
-                ));
-            }
-        }
-
-        Err(io::Error::new(
-            ErrorKind::NotFound,
-            format!("Failed to find process `{target}`"),
-        ))
+        Self::from_handle(find_process(target, check_process_name)?)
     }
 
     /// Finds a process by name, then calls `Process::new`. Only allows strict matches (e.g.
-    /// `myapp` won't match `./myapp --gui` and `find / | grep myapp`).
+    /// `myapp` won't match `./myapp --gui` or `find / | grep myapp`).
     pub fn find_strict(target: &str) -> io::Result<Self> {
-        let dir = read_dir("/proc")?;
-
-        for entry in dir {
-            let entry = entry?;
-            if !entry
-                .file_name()
-                .to_string_lossy()
-                .chars()
-                .all(char::is_numeric)
-            {
-                continue;
-            }
-
-            if check_process_status_file_strict(
-                &format!("/proc/{}/status", entry.file_name().to_string_lossy()),
-                target,
-            )? {
-                return Self::new(Pid::from_raw(
-                    entry.file_name().to_string_lossy().parse().unwrap(),
-                ));
-            }
-        }
-
-        Err(io::Error::new(
-            ErrorKind::NotFound,
-            format!("Failed to find process `{target}`"),
-        ))
+        Self::from_handle(find_process(target, check_process_name_strict)?)
     }
 
     /// Gets the base address of the process' memory (the first mapping in /proc/pid/maps).
@@ -155,17 +105,7 @@ impl Process {
             return Ok(());
         }
 
-        let file = format!("/proc/{}/maps", self.pid);
-
-        let data = read_to_string(file)?;
-		let line = data.lines().next().ok_or(Errno::ENOKEY)?;
-		let (base, _) = line.split_once('-').ok_or(Errno::ENOKEY)?;
-        self.base = Some(usize::from_str_radix(base, 16).map_err(|_| {
-            io::Error::new(
-                ErrorKind::InvalidData,
-                format!("Bad format in /proc/{}/maps", self.pid),
-            )
-        })?);
+        self.base = Some(get_base(self.handle)?);
         
         Ok(())
     }
